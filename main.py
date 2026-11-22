@@ -72,3 +72,10 @@ async def create_user(user: UserCreate, db=Depends(get_cursor)):
     except mysql.connector.IntegrityError as e:
         handle_integrity_error(conn, e)
     return get_user_or_404(cursor, cursor.lastrowid)
+
+
+@app.get("/users/{user_id}", response_model=UserOut, tags=["Usuarios"],
+         summary="Obtiene un usuario")
+async def get_user(user_id: int = Path(..., ge=1), db = Depends(get_cursor)):
+    conn, cursor = db
+    return get_user_or_404(cursor, user_id)
