@@ -96,3 +96,14 @@ async def update_user(user: UserUpdate, user_id: int = Path(..., ge=1),
     except mysql.connector.IntegrityError as e:
         handle_integrity_error(conn, e)
     return get_user_or_404(cursor, user_id)
+
+
+@app.delete("/users/{user_id}", status_code=204, tags=["Usuarios"],
+            summary="Elimina un usuario y sus preferencias y favoritos")
+async def delete_user(user_id: int = Path(..., ge=1), db=Depends(get_cursor)):
+    conn, cursor = db
+    cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+    conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail=f"Usuario {user_id} no encontrado")
+    return Response(status_code=204)
