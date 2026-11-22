@@ -57,3 +57,18 @@ def handle_integrity_error(conn, e: mysql.connector.IntegrityError):
     if e.errno == errorcode.ER_DUP_ENTRY:
         raise HTTPException(status_code=409, detail="El username o el email ya están en uso")
     raise HTTPException(status_code=400, detail="Datos inválidos")
+
+
+@app.post("/users", response_model=UserOut, status_code=201, tags=["Usuarios"],
+          summary="Crea un usuario")
+async def create_user(user: UserCreate, db=Depends(get_cursor)):
+    conn, cursor = db
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, email, full_name) VALUES (%s, %s, %s)",
+            (user.username, user.email, user.full_name),
+        )
+        conn.commit()
+    except mysql.connector.IntegrityError as e:
+        handle_integrity_error(conn, e)
+    return get_user_or_404(cursor, cursor.lastrowid)
