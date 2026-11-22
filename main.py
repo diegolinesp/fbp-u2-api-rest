@@ -195,12 +195,3 @@ async def spotify_track(track_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
          summary="Obtiene un artista de Spotify")
 async def spotify_artist(artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
     return await spotify_client.get_artist(artist_id)
-
-
-@app.get("/spotify/artists/{artist_id}/top-tracks", response_model=list[TrackOut],
-         tags=["Spotify"], summary="Canciones más populares de un artista")
-async def spotify_artist_top_tracks(
-    artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN),
-    market: str = Query("ES", pattern=r"^[A-Z]{2}$"),  # código de país ISO 3166-1
-):
-    return await spotify_client.get_artist_top_tracks(artist_id, market)

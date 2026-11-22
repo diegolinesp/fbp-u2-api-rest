@@ -1,3 +1,8 @@
+import logging
+
+#Logger de uvicorn: sus mensajes aparecen en la terminal de fastapi dev
+logger = logging.getLogger("uvicorn.error")
+
 import os
 import time
 from typing import Literal
@@ -25,8 +30,10 @@ async def _get_token() -> str:
                 auth=(os.getenv("SPOTIFY_CLIENT_ID", ""), os.getenv("SPOTIFY_CLIENT_SECRET", "")),
             )
     except httpx.HTTPError:
+        logger.exception("Fallo de red al pedir el token a Spotify")
         raise HTTPException(status_code=502, detail="No se pudo contactar con Spotify")
     if r.status_code != 200:
+        logger.error("Spotify rechazó la autenticación: %s %s", r.status_code, r.text)
         # Credenciales mal configuradas: es un fallo de nuestro servidor, no del cliente
         raise HTTPException(status_code=502, detail="Error de autenticación con Spotify")
     data = r.json()
@@ -42,10 +49,12 @@ async def _get(path: str, params: dict | None = None) -> dict:
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 r = await client.get(f"{API_URL}{path}", params=params,
-                                     headers={"Authorization:": f"Bearer {token}"})
+                                     headers={"Authorization": f"Bearer {token}"})
         except httpx.TimeoutException:
+            logger.warning("Timeout en GET %s", path)
             raise HTTPException(status_code=504, detail="Spotify no ha respondido a tiempo")
         except httpx.RequestError:
+            logger.exception("Fallo de red en GET %s", path)
             raise HTTPException(status_code=502, detail="No se pudo contactar con Spotify")
         
         # 401 = token caducado o revocado: se descarta y se reintenta una sola vez
@@ -65,6 +74,7 @@ async def _get(path: str, params: dict | None = None) -> dict:
         raise HTTPException(status_code=503,
                             detail="Límite de peticiones de Spotify alcanzado, inténtalo más tarde",
                             headers={"Retry-After": r.headers.get("Retry-After", "30")})
+    logger.error("Respuesta inesperada de Spotify en %s: %s %s", path, r.status_code, r.text)
     raise HTTPException(status_code=502, detail=f"Error inesperado de Spotify ({r.status_code})")
 
 
@@ -103,8 +113,3 @@ async def search(q: str, kind: Literal["track", "artist"], limit: int) -> list[d
     simplify = simplify_track if kind == "track" else simplify_artist
     # Spotify a veces devuelve elementos null en las búsquedas: se descartan
     return [simplify(item) for item in data[f"{kind}s"]["items"] if item]
-
-
-async def get_artist_top_tracks(artist_id: str, market: str) -> list[dict]:
-    data = await _get(f"/artists({artist_id}/top-tracks", {"market": market})
-    return [simplify_track(t) for t in data["tracks"]]
