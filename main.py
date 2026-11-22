@@ -4,7 +4,7 @@ import spotify_client
 from mysql.connector import errorcode
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
-from schemas import (SPOTIFY_ID_PATTERN, ArtistOut, PreferencesIn, PreferencesOut, TrackOut, UserCreate, UserOut, UserUpdate)
+from schemas import (SPOTIFY_ID_PATTERN, ArtistOut, PreferencesIn, PreferencesOut, TrackOut, UserCreate, UserOut, UserUpdate, FavoriteArtistIn, FavoriteArtistOut, FavoriteTrackIn, FavoriteTrackOut)
 from configuration.connections import DatabaseConnection
 
 load_dotenv() # carga las variables del archivo .env
@@ -195,3 +195,155 @@ async def spotify_track(track_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
          summary="Obtiene un artista de Spotify")
 async def spotify_artist(artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
     return await spotify_client.get_artist(artist_id)
+
+
+# ---------- Caché de Spotify en MySQL ----------
+
+def upsert_track(cursor, t: dict):
+    # Inserta la canción en la caché o, si ya estaba, actualiza sus datos
+    cursor.execute(
+        """INSERT INTO tracks (id, name, artist_names, album_name, duration_ms, spotify_url)
+           VALUES (%s, %s, %s, %s, %s, %s) AS new
+           ON DUPLICATE KEY UPDATE name = new.name, artist_names = new.artist_names,
+               album_name = new.album_name, duration_ms = new.duration_ms,
+               spotify_url = new.spotify_url""",
+        (t["id"], t["name"], t["artist_names"], t["album_name"], t["duration_ms"],
+         t["spotify_url"]),
+    )
+
+
+def upsert_artist(cursor, a: dict):
+    cursor.execute(
+        """INSERT INTO artists (id, name, spotify_url, image_url)
+           VALUES (%s, %s, %s, %s) AS new
+           ON DUPLICATE KEY UPDATE name = new.name, spotify_url = new.spotify_url,
+               image_url = new.image_url""",
+        (a["id"], a["name"], a["spotify_url"], a["image_url"]),
+    )
+
+
+FAV_TRACKS_SQL = """SELECT t.id, t.name, t.artist_names, t.album_name, t.duration_ms,
+                           t.spotify_url, f.added_at
+                    FROM user_favorite_tracks f JOIN tracks t ON t.id = f.track_id
+                    WHERE f.user_id = %s"""
+
+FAV_ARTISTS_SQL = """SELECT a.id, a.name, a.spotify_url, a.image_url, f.added_at
+                     FROM user_favorite_artists f JOIN artists a ON a.id = f.artist_id
+                     WHERE f.user_id = %s"""
+
+
+# ---------- Canciones favoritas ----------
+
+@app.post("/users/{user_id}/favorites/tracks", response_model=FavoriteTrackOut,
+          status_code=201, tags=["Favoritos"], summary="Añade una canción a favoritos")
+async def add_favorite_track(fav: FavoriteTrackIn, user_id: int = Path(..., ge=1),
+                             db=Depends(get_cursor)):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    # Se consulta Spotify: valida que la canción existe (404 si no) y trae sus datos
+    track = await spotify_client.get_track(fav.track_id)
+    try:
+        # Caché y relación en la misma transacción
+        upsert_track(cursor, track)
+        cursor.execute("INSERT INTO user_favorite_tracks (user_id, track_id) VALUES (%s, %s)",
+                       (user_id, track["id"]))
+        conn.commit()
+    except mysql.connector.IntegrityError as e:
+        conn.rollback()
+        if e.errno == errorcode.ER_DUP_ENTRY:  # clave primaria (user_id, track_id)
+            raise HTTPException(status_code=409, detail="La canción ya está en favoritos")
+        raise HTTPException(status_code=400, detail="Datos inválidos")
+    cursor.execute(FAV_TRACKS_SQL + " AND f.track_id = %s", (user_id, track["id"]))
+    return cursor.fetchone()
+
+
+@app.get("/users/{user_id}/favorites/tracks", response_model=list[FavoriteTrackOut],
+         tags=["Favoritos"], summary="Lista las canciones favoritas de un usuario")
+async def list_favorite_tracks(
+    user_id: int = Path(..., ge=1),
+    refresh: bool = Query(False, description="Actualiza los datos desde Spotify antes de devolverlos"),
+    db=Depends(get_cursor),
+):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    # Por defecto se sirve desde la caché (rápido, sin gastar peticiones a Spotify);
+    # con refresh=true se vuelve a pedir cada canción a Spotify y se actualiza la caché
+    if refresh:
+        cursor.execute("SELECT track_id FROM user_favorite_tracks WHERE user_id = %s",
+                       (user_id,))
+        for row in cursor.fetchall():
+            upsert_track(cursor, await spotify_client.get_track(row["track_id"]))
+        conn.commit()
+    cursor.execute(FAV_TRACKS_SQL + " ORDER BY f.added_at DESC", (user_id,))
+    return cursor.fetchall()
+
+
+@app.delete("/users/{user_id}/favorites/tracks/{track_id}", status_code=204,
+            tags=["Favoritos"], summary="Quita una canción de favoritos")
+async def remove_favorite_track(user_id: int = Path(..., ge=1),
+                                track_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN),
+                                db=Depends(get_cursor)):
+    conn, cursor = db
+    # Solo se borra la relación; la canción sigue en la caché para otros usuarios
+    cursor.execute("DELETE FROM user_favorite_tracks WHERE user_id = %s AND track_id = %s",
+                   (user_id, track_id))
+    conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="La canción no está en los favoritos del usuario")
+    return Response(status_code=204)
+
+
+# ---------- Artistas favoritos ----------
+
+@app.post("/users/{user_id}/favorites/artists", response_model=FavoriteArtistOut,
+          status_code=201, tags=["Favoritos"], summary="Añade un artista a favoritos")
+async def add_favorite_artist(fav: FavoriteArtistIn, user_id: int = Path(..., ge=1),
+                              db=Depends(get_cursor)):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    artist = await spotify_client.get_artist(fav.artist_id)
+    try:
+        upsert_artist(cursor, artist)
+        cursor.execute("INSERT INTO user_favorite_artists (user_id, artist_id) VALUES (%s, %s)",
+                       (user_id, artist["id"]))
+        conn.commit()
+    except mysql.connector.IntegrityError as e:
+        conn.rollback()
+        if e.errno == errorcode.ER_DUP_ENTRY:
+            raise HTTPException(status_code=409, detail="El artista ya está en favoritos")
+        raise HTTPException(status_code=400, detail="Datos inválidos")
+    cursor.execute(FAV_ARTISTS_SQL + " AND f.artist_id = %s", (user_id, artist["id"]))
+    return cursor.fetchone()
+
+
+@app.get("/users/{user_id}/favorites/artists", response_model=list[FavoriteArtistOut],
+         tags=["Favoritos"], summary="Lista los artistas favoritos de un usuario")
+async def list_favorite_artists(
+    user_id: int = Path(..., ge=1),
+    refresh: bool = Query(False, description="Actualiza los datos desde Spotify antes de devolverlos"),
+    db=Depends(get_cursor),
+):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    if refresh:
+        cursor.execute("SELECT artist_id FROM user_favorite_artists WHERE user_id = %s",
+                       (user_id,))
+        for row in cursor.fetchall():
+            upsert_artist(cursor, await spotify_client.get_artist(row["artist_id"]))
+        conn.commit()
+    cursor.execute(FAV_ARTISTS_SQL + " ORDER BY f.added_at DESC", (user_id,))
+    return cursor.fetchall()
+
+
+@app.delete("/users/{user_id}/favorites/artists/{artist_id}", status_code=204,
+            tags=["Favoritos"], summary="Quita un artista de favoritos")
+async def remove_favorite_artist(user_id: int = Path(..., ge=1),
+                                 artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN),
+                                 db=Depends(get_cursor)):
+    conn, cursor = db
+    cursor.execute("DELETE FROM user_favorite_artists WHERE user_id = %s AND artist_id = %s",
+                   (user_id, artist_id))
+    conn.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="El artista no está en los favoritos del usuario")
+    return Response(status_code=204)
