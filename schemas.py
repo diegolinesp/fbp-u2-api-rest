@@ -64,3 +64,19 @@ class ArtistOut(BaseModel):
     name: str
     spotify_url: str | None = None
     image_url: str | None = None
+
+
+class FavoriteTrackIn(BaseModel):
+    track_id: str = Field(..., pattern=SPOTIFY_ID_PATTERN, examples=["4u7EnebtmKWzUH433cf5Qv"])
+
+
+class FavoriteArtistIn(BaseModel):
+    artist_id: str = Field(..., pattern=SPOTIFY_ID_PATTERN, examples=["1dfeR4HaWDbWqFHLkxsg1d"])
+
+
+class FavoriteTrackOut(TrackOut):
+    added_at: datetime
+
+
+class FavoriteArtistOut(ArtistOut):
+    added_at: datetime
