@@ -145,3 +145,26 @@ async def get_preferences(user_id: int = Path(..., ge=1), db = Depends(get_curso
     conn, cursor = db
     get_user_or_404(cursor, user_id) # 404 si el usuario no existe (no una lista vacía)
     return {"user_id": user_id, "genres": get_genres(cursor, user_id)}
+
+
+@app.put("/users/{user_id}/preferences", response_model=PreferencesOut,
+         tags=["Preferencias"], summary="Sustituye los géneros favoritos de un usuario")
+async def replace_preferences(prefs: PreferencesIn, user_id: int = Path(..., ge=1),
+                              db=Depends(get_cursor)):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    try:
+        # PUT sustituye la lista completa: se borra la anterior y se inserta la nueva.
+        # Las dos operaciones van en la misma transacción (mysql.connector no hace
+        # autocommit), así que si algo falla no queda la lista a medias
+        cursor.execute("DELETE FROM user_genres WHERE user_id = %s", (user_id,))
+        if prefs.genres:
+            cursor.executemany(
+                "INSERT INTO user_genres (user_id, genre) VALUES (%s, %s)",
+                [(user_id, genre) for genre in prefs.genres],
+            )
+        conn.commit()
+    except mysql.connector.Error:
+        conn.rollback()
+        raise HTTPException(status_code=503, detail="Error al guardar las preferencias")
+    return {"user_id": user_id, "genres": get_genres(cursor, user_id)}
