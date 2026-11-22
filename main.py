@@ -1,13 +1,18 @@
+import logging
 import os
 import mysql.connector
 import spotify_client
 from mysql.connector import errorcode
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
+from fastapi import Request, Depends, FastAPI, HTTPException, Path, Query, Response
+from fastapi.responses import JSONResponse
 from schemas import (SPOTIFY_ID_PATTERN, ArtistOut, PreferencesIn, PreferencesOut, TrackOut, UserCreate, UserOut, UserUpdate, FavoriteArtistIn, FavoriteArtistOut, FavoriteTrackIn, FavoriteTrackOut)
 from configuration.connections import DatabaseConnection
 
+logger = logging.getLogger("uvicorn.error")
+
 load_dotenv() # carga las variables del archivo .env
+
 
 app = FastAPI(
     title="Spotify Users API",
@@ -15,6 +20,15 @@ app = FastAPI(
                   "y sus canciones y artistas favoritos, integrada con Spotify y MySQL.",
     version="1.0.0",
 )
+
+
+@app.exception_handler(mysql.connector.Error)
+async def mysql_error_handler(request: Request, exc: mysql.connector.Error):
+    # Cualquier error de MySQL no capturado en un endpoint acaba aquí:
+    # se registra el detalle en el servidor y el cliente recibe un 503 genérico
+    logger.exception("Error de MySQL en %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=503, content={"detail": "Error de base de datos"})
+
 
 async def get_cursor():
     """Abre una conexión por petición y la cierra al terminar."""
