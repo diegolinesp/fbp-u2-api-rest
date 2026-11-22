@@ -1,9 +1,10 @@
 import os
 import mysql.connector
+import spotify_client
 from mysql.connector import errorcode
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
-from schemas import UserCreate, UserOut, UserUpdate, PreferencesIn, PreferencesOut
+from schemas import (SPOTIFY_ID_PATTERN, ArtistOut, PreferencesIn, PreferencesOut, TrackOut, UserCreate, UserOut, UserUpdate)
 from configuration.connections import DatabaseConnection
 
 load_dotenv() # carga las variables del archivo .env
@@ -168,3 +169,38 @@ async def replace_preferences(prefs: PreferencesIn, user_id: int = Path(..., ge=
         conn.rollback()
         raise HTTPException(status_code=503, detail="Error al guardar las preferencias")
     return {"user_id": user_id, "genres": get_genres(cursor, user_id)}
+
+
+@app.get("/spotify/search/tracks", response_model=list[TrackOut], tags=["Spotify"],
+         summary="Busca canciones en Spotify")
+async def search_tracks(q: str = Query(..., min_length=1, max_length=100),
+                        limit: int = Query(10, ge=1, le=50)):
+    return await spotify_client.search(q, "track", limit)
+
+
+@app.get("/spotify/search/artists", response_model=list[ArtistOut], tags=["Spotify"],
+         summary="Busca artistas en Spotify")
+async def search_artists(q: str = Query(..., min_length=1, max_length=100),
+                         limit: int = Query(10, ge=1, le=50)):
+    return await spotify_client.search(q, "artist", limit)
+
+
+@app.get("/spotify/tracks/{track_id}", response_model=TrackOut, tags=["Spotify"],
+         summary="Obtiene una canción de Spotify")
+async def spotify_track(track_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
+    return await spotify_client.get_track(track_id)
+
+
+@app.get("/spotify/artists/{artist_id}", response_model=ArtistOut, tags=["Spotify"],
+         summary="Obtiene un artista de Spotify")
+async def spotify_artist(artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN)):
+    return await spotify_client.get_artist(artist_id)
+
+
+@app.get("/spotify/artists/{artist_id}/top-tracks", response_model=list[TrackOut],
+         tags=["Spotify"], summary="Canciones más populares de un artista")
+async def spotify_artist_top_tracks(
+    artist_id: str = Path(..., pattern=SPOTIFY_ID_PATTERN),
+    market: str = Query("ES", pattern=r"^[A-Z]{2}$"),  # código de país ISO 3166-1
+):
+    return await spotify_client.get_artist_top_tracks(artist_id, market)
