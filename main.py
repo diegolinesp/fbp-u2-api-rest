@@ -3,7 +3,7 @@ import mysql.connector
 from mysql.connector import errorcode
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
-from schemas import UserCreate, UserOut, UserUpdate
+from schemas import UserCreate, UserOut, UserUpdate, PreferencesIn, PreferencesOut
 from configuration.connections import DatabaseConnection
 
 load_dotenv() # carga las variables del archivo .env
@@ -131,3 +131,17 @@ async def delete_user(user_id: int = Path(..., ge=1), db=Depends(get_cursor)):
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"Usuario {user_id} no encontrado")
     return Response(status_code=204) # 204 = éxito sin cuerpo
+
+
+def get_genres(cursor, user_id: int) -> list[str]:
+    cursor.execute("SELECT genre FROM user_genres WHERE user_id = %s ORDER BY genre",
+                   (user_id,))
+    return [row["genre"] for row in cursor.fetchall()]
+
+
+@app.get("/users/{user_id}/preferences", response_model=PreferencesOut,
+         tags=["Preferencias"], summary="Obtiene los géneros favoritos de un usuario")
+async def get_preferences(user_id: int = Path(..., ge=1), db = Depends(get_cursor)):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id) # 404 si el usuario no existe (no una lista vacía)
+    return {"user_id": user_id, "genres": get_genres(cursor, user_id)}
