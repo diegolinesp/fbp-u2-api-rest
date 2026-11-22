@@ -41,6 +41,8 @@ async def health(db=Depends(get_cursor)):
     return {"status": "ok", "database": cursor.fetchone()["ok"] == 1}
 
 
+# Columnas que se devuelven al cliente. Es una constante del código, no un dato
+# del usuario, así que interpolarla con f-string no abre la puerta a inyección SQL.
 USER_COLUMNS = "id, username, email, full_name, created_at, updated_at"
 
 
@@ -54,6 +56,7 @@ def get_user_or_404(cursor, user_id: int) -> dict:
 
 def handle_integrity_error(conn, e: mysql.connector.IntegrityError):
     conn.rollback()
+    # username y email son UNIQUE en la tabla: un duplicado es un conflicto (409)
     if e.errno == errorcode.ER_DUP_ENTRY:
         raise HTTPException(status_code=409, detail="El username o el email ya están en uso")
     raise HTTPException(status_code=400, detail="Datos inválidos")
@@ -64,6 +67,7 @@ def handle_integrity_error(conn, e: mysql.connector.IntegrityError):
 async def create_user(user: UserCreate, db=Depends(get_cursor)):
     conn, cursor = db
     try:
+        # Consulta parametrizada (%s); el driver escapa los valores
         cursor.execute(
             "INSERT INTO users (username, email, full_name) VALUES (%s, %s, %s)",
             (user.username, user.email, user.full_name),
@@ -71,7 +75,21 @@ async def create_user(user: UserCreate, db=Depends(get_cursor)):
         conn.commit()
     except mysql.connector.IntegrityError as e:
         handle_integrity_error(conn, e)
+    # Se relee la fila para devolver el id y los timestamps generados por MySQL
     return get_user_or_404(cursor, cursor.lastrowid)
+
+
+@app.get("/users", response_model=list[UserOut], tags=["Usuarios"],
+         summary="Lista usuarios (paginado)")
+async def list_users(
+    limit: int = Query(20, ge=1, le=100), # tope de 100 para no devolver tablas enteras
+    offset: int = Query(0, ge=0),
+    db=Depends(get_cursor),
+):
+    conn, cursor = db
+    cursor.execute(f"SELECT {USER_COLUMNS} FROM users ORDER BY id LIMIT %s OFFSET %s",
+                   (limit, offset))
+    return cursor.fetchall()
 
 
 @app.get("/users/{user_id}", response_model=UserOut, tags=["Usuarios"],
@@ -86,6 +104,8 @@ async def get_user(user_id: int = Path(..., ge=1), db = Depends(get_cursor)):
 async def update_user(user: UserUpdate, user_id: int = Path(..., ge=1),
                       db = Depends(get_cursor)):
     conn, cursor = db
+    # Se comprueba antes de actualizar porque en un UPDATE el rowcount cuenta las filas
+    # *modificadas*: si los datos no cambian vale 0 aunque el usuario exista
     get_user_or_404(cursor, user_id)
     try:
         cursor.execute(
@@ -95,6 +115,7 @@ async def update_user(user: UserUpdate, user_id: int = Path(..., ge=1),
         conn.commit()
     except mysql.connector.IntegrityError as e:
         handle_integrity_error(conn, e)
+    # updated_at lo actualiza MySQL solo (ON UPDATE CURRENT_TIMESTAMP)
     return get_user_or_404(cursor, user_id)
 
 
@@ -102,8 +123,11 @@ async def update_user(user: UserUpdate, user_id: int = Path(..., ge=1),
             summary="Elimina un usuario y sus preferencias y favoritos")
 async def delete_user(user_id: int = Path(..., ge=1), db=Depends(get_cursor)):
     conn, cursor = db
+    # ON DELETE CASCADE borra también sus géneros y favoritos, pero no la caché
+    # de canciones y artistas, que puede estar compartida con otros usuarios
     cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
     conn.commit()
+    # En un DELETE el rowcount sí es fiable: 0 significa que no existía
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"Usuario {user_id} no encontrado")
-    return Response(status_code=204)
+    return Response(status_code=204) # 204 = éxito sin cuerpo
