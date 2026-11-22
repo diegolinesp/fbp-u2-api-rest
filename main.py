@@ -1,7 +1,9 @@
 import os
 import mysql.connector
+from mysql.connector import errorcode
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
+from schemas import UserCreate, UserOut, UserUpdate
 from configuration.connections import DatabaseConnection
 
 load_dotenv() # carga las variables del archivo .env
