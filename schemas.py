@@ -44,3 +44,23 @@ class PreferencesIn(BaseModel):
 class PreferencesOut(BaseModel):
     user_id: int
     genres: list[str]
+    
+    
+# Los IDs de Spotify son 22 caracteres en base62
+SPOTIFY_ID_PATTERN = r"^[0-9A-Za-z]{22}$"
+
+
+class TrackOut(BaseModel):
+    id: str
+    name: str
+    artist_names: str
+    album_name: str | None = None
+    duration_ms: int
+    spotify_url: str | None = None
+
+
+class ArtistOut(BaseModel):
+    id: str
+    name: str
+    spotify_url: str | None = None
+    image_url: str | None = None
