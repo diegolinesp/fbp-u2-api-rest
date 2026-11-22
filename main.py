@@ -79,3 +79,20 @@ async def create_user(user: UserCreate, db=Depends(get_cursor)):
 async def get_user(user_id: int = Path(..., ge=1), db = Depends(get_cursor)):
     conn, cursor = db
     return get_user_or_404(cursor, user_id)
+
+
+@app.put("/users/{user_id}", response_model=UserOut, tags=["Usuarios"],
+         summary="Actualiza un usuario (sustitución completa)")
+async def update_user(user: UserUpdate, user_id: int = Path(..., ge=1),
+                      db = Depends(get_cursor)):
+    conn, cursor = db
+    get_user_or_404(cursor, user_id)
+    try:
+        cursor.execute(
+            "UPDATE users SET username = %s, email = %s, full_name = %s WHERE id = %s",
+            (user.username, user.email, user.full_name, user_id),
+        )
+        conn.commit()
+    except mysql.connector.IntegrityError as e:
+        handle_integrity_error(conn, e)
+    return get_user_or_404(cursor, user_id)
