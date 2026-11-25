@@ -17,7 +17,7 @@ y sus canciones y artistas favoritos, con persistencia en **MySQL** e integraci√
 
 ## Instalaci√≥n
 ```bash
-git clone <URL_DEL_REPOSITORIO>
+git clone https://github.com/diegolinesp/fbp-u2-api-rest.git
 cd fbp-u2-api-rest
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
